@@ -235,12 +235,11 @@ def create_video_from_script(
     Returns path to the output video file.
     """
     try:
-        from moviepy.editor import (
+        from moviepy import (
             AudioFileClip,
             CompositeAudioClip,
             CompositeVideoClip,
             ImageClip,
-            VideoFileClip,
             concatenate_videoclips,
         )
     except ImportError:
@@ -286,7 +285,7 @@ def create_video_from_script(
         colors=colors,
         progress=0.0,
     )
-    hook_clip = ImageClip(hook_frame).set_duration(section_duration * 0.5)
+    hook_clip = ImageClip(hook_frame, duration=section_duration * 0.5)
     clips.append(hook_clip)
 
     for idx, section in enumerate(script.sections):
@@ -313,7 +312,7 @@ def create_video_from_script(
             progress=progress,
         )
 
-        clip = ImageClip(frame).set_duration(section_duration)
+        clip = ImageClip(frame, duration=section_duration)
         clips.append(clip)
 
     # Outro clip
@@ -332,41 +331,41 @@ def create_video_from_script(
         colors=colors,
         progress=1.0,
     )
-    outro_clip = ImageClip(outro_frame).set_duration(section_duration * 0.5)
+    outro_clip = ImageClip(outro_frame, duration=section_duration * 0.5)
     clips.append(outro_clip)
 
     # Concatenate all clips
     video = concatenate_videoclips(clips, method="compose")
-    video = video.set_fps(VIDEO_FPS)
+    video = video.with_fps(VIDEO_FPS)
 
     # Add narration audio
     narration_audio = AudioFileClip(str(audio_path))
 
     # Trim video to match audio if needed
     if video.duration > narration_audio.duration:
-        video = video.subclip(0, narration_audio.duration)
+        video = video.subclipped(0, narration_audio.duration)
     elif narration_audio.duration > video.duration:
-        narration_audio = narration_audio.subclip(0, video.duration)
+        narration_audio = narration_audio.subclipped(0, video.duration)
 
     # Mix with background music if provided
     if background_music_path and background_music_path.exists():
         bg_music = AudioFileClip(str(background_music_path))
-        bg_music = bg_music.volumex(0.08)  # Background music at 8% volume
+        bg_music = bg_music.with_volume_scaled(0.08)
         if bg_music.duration < narration_audio.duration:
             # Loop the music
             loops = int(narration_audio.duration / bg_music.duration) + 1
             bg_segments = [bg_music] * loops
-            from moviepy.editor import concatenate_audioclips
-            bg_music = concatenate_audioclips(bg_segments).subclip(
+            from moviepy import concatenate_audioclips
+            bg_music = concatenate_audioclips(bg_segments).subclipped(
                 0, narration_audio.duration
             )
         else:
-            bg_music = bg_music.subclip(0, narration_audio.duration)
+            bg_music = bg_music.subclipped(0, narration_audio.duration)
         final_audio = CompositeAudioClip([narration_audio, bg_music])
     else:
         final_audio = narration_audio
 
-    video = video.set_audio(final_audio)
+    video = video.with_audio(final_audio)
 
     # Export
     logger.info(f"Rendering video: {output_path}")
@@ -377,7 +376,6 @@ def create_video_from_script(
         audio_codec="aac",
         threads=4,
         preset="fast",
-        verbose=False,
         logger=None,
     )
 

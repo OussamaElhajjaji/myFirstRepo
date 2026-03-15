@@ -4,11 +4,22 @@ Converts video scripts to audio using gTTS (Google Text-to-Speech).
 Supports chunked generation for long scripts and audio stitching.
 """
 import logging
+import os
 import re
 import time
 from pathlib import Path
 
 from pydub import AudioSegment
+
+# Use bundled ffmpeg from imageio_ffmpeg if system ffmpeg is not available
+try:
+    import imageio_ffmpeg as _iio_ffmpeg
+    _ffmpeg_bin = _iio_ffmpeg.get_ffmpeg_exe()
+    AudioSegment.converter = _ffmpeg_bin
+    AudioSegment.ffmpeg = _ffmpeg_bin
+    AudioSegment.ffprobe = _ffmpeg_bin
+except Exception:
+    pass
 
 from youtube_cash_cow.config import AUDIO_DIR, TTS_LANGUAGE, TTS_SLOW
 from youtube_cash_cow.modules.script_writer import VideoScript
@@ -202,8 +213,19 @@ def generate_section_audios(script: VideoScript) -> list[Path]:
 def get_audio_duration(audio_path: Path) -> float:
     """Return the duration of an audio file in seconds."""
     try:
+        # Try pydub first
         audio = AudioSegment.from_file(str(audio_path))
         return len(audio) / 1000.0
+    except Exception:
+        pass
+
+    # Fallback: use moviepy which relies on imageio_ffmpeg (always available)
+    try:
+        from moviepy import AudioFileClip
+        clip = AudioFileClip(str(audio_path))
+        dur = clip.duration
+        clip.close()
+        return dur
     except Exception as e:
         logger.error(f"Could not get audio duration: {e}")
         return 0.0
