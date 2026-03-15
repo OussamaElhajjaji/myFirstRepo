@@ -1,0 +1,35 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Assets (large binaries — don't commit downloaded media)
+assets/videos/
+assets/images/
+assets/audio/
+assets/output/
+
+# Auth / secrets
+config/instagram_session.json
+config/youtube_token.json
+config/youtube_client_secrets.json
+
+# Logs
+logs/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
