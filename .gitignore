@@ -1,0 +1,40 @@
+# Environment
+.env
+*.env
+
+# Output files (too large for git)
+output/videos/*.mp4
+output/audio/*.mp3
+output/audio/*.wav
+
+# YouTube credentials (sensitive)
+client_secrets.json
+youtube_token.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+
+# Logs
+logs/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
