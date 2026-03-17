@@ -26,6 +26,9 @@ pip-wheel-metadata/
 .mypy_cache/
 .pytest_cache/
 
+# Database
+output/*.db
+
 # Logs
 logs/*.log
 
