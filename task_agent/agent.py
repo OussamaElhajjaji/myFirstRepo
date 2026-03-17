@@ -1,206 +1,223 @@
 """
-Claude-powered task tracking agent with tool use.
+TaskAgent — persoonlijke 24/7 assistent.
+
+Architectuur:
+  - ModelRouter beslist welk LLM gebruikt wordt op basis van query-intent
+  - Claude wordt altijd gebruikt voor tool-calls (betrouwbaarder dan lokale modellen)
+  - Ollama wordt gebruikt voor conversationele antwoorden (sneller, gratis, privé)
+  - ConversationStore persisteert alle berichten in SQLite
+  - MotivationEngine verrijkt voltooide taken met aanmoedigingen
+  - ReminderDaemon draait als achtergrond-thread
 """
+
+from __future__ import annotations
+
 import json
-from typing import Any
+import logging
+from datetime import datetime
+from typing import Optional
 
 import anthropic
 
-from task_agent import task_store
+from .database.store import ConversationStore, TaskStore
+from .features.motivation import MotivationEngine
+from .features.reminders import ReminderDaemon
+from .llm.base import Message, LLMResponse
+from .model_router import ModelRouter, QueryIntent
+from .tools.task_tools import TASK_TOOLS, execute_tool
 
-client = anthropic.Anthropic()
-MODEL = "claude-opus-4-6"
+logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """Je bent een vriendelijke en efficiënte taakbeheerder.
-Je helpt de gebruiker om hun dagelijkse taken bij te houden via natuurlijke taal.
+_SYSTEM_PROMPT = """Je bent een persoonlijke 24/7 assistent die de gebruiker helpt zijn taken
+te beheren, te plannen en te voltooien. Je spreekt altijd Nederlands.
 
-Gebruik de beschikbare tools om taken toe te voegen, te voltooien, bij te werken of te verwijderen.
-Geef altijd een beknopte samenvatting na elke actie.
+Vandaag is het: {date}
 
-Datums schrijf je als YYYY-MM-DD. Prioriteiten zijn: low, medium, high.
-Categorieën zijn vrij te kiezen (bijv. werk, privé, sport, administratie).
+Jouw karakter:
+- Warm en motiverend, maar direct en to-the-point
+- Je herinnert de gebruiker proactief aan deadlines en achterstallige taken
+- Je viert voltooide taken enthousiast
+- Je helpt bij het stellen van prioriteiten als de gebruiker overweldigd voelt
+- Je stelt gerichte vragen als een verzoek onduidelijk is
+- Je gebruikt emoji spaarzaam maar effectief
 
-Vandaag is: {today}
+Gebruik tools voor alle taakbeheer-acties. Geef ALTIJD een menselijk antwoord
+ná de tool-call — nooit alleen een ruwe tool-output.
 """
 
-
-# ── Tool definitions ──────────────────────────────────────────────────────────
-
-TOOLS: list[dict] = [
+# Claude tool-definities (Anthropic-formaat, voor native tool_use)
+_CLAUDE_TOOLS = [
     {
-        "name": "add_task",
-        "description": "Voeg een nieuwe taak toe aan de lijst.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Korte naam van de taak"},
-                "description": {"type": "string", "description": "Optionele beschrijving"},
-                "priority": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high"],
-                    "description": "Prioriteit (standaard: medium)",
-                },
-                "due_date": {
-                    "type": "string",
-                    "description": "Vervaldatum in formaat YYYY-MM-DD (optioneel)",
-                },
-                "category": {
-                    "type": "string",
-                    "description": "Categorie, bijv. werk, privé, sport (standaard: general)",
-                },
-            },
-            "required": ["title"],
-        },
-    },
-    {
-        "name": "list_tasks",
-        "description": "Bekijk de takenlijst, optioneel gefilterd.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "filter_done": {
-                    "type": "boolean",
-                    "description": "true = alleen voltooide taken, false = alleen openstaande",
-                },
-                "category": {"type": "string", "description": "Filter op categorie"},
-                "priority": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high"],
-                    "description": "Filter op prioriteit",
-                },
-            },
-        },
-    },
-    {
-        "name": "complete_task",
-        "description": "Markeer een taak als voltooid op basis van het ID.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Het 8-karakter taak-ID"}
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "update_task",
-        "description": "Pas een bestaande taak aan (titel, beschrijving, prioriteit, vervaldatum of categorie).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Het 8-karakter taak-ID"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
-                "category": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "delete_task",
-        "description": "Verwijder een taak permanent op basis van het ID.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Het 8-karakter taak-ID"}
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "get_summary",
-        "description": "Geef een overzicht: totaal, voltooid, openstaand, verlopen en vandaag vervallende taken.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
+        "name": t.name,
+        "description": t.description,
+        "input_schema": t.parameters,
+    }
+    for t in TASK_TOOLS
 ]
 
 
-# ── Tool executor ─────────────────────────────────────────────────────────────
-
-def _execute_tool(name: str, inputs: dict) -> Any:
-    if name == "add_task":
-        result = task_store.add_task(**inputs)
-        return {"success": True, "task": result}
-
-    if name == "list_tasks":
-        tasks = task_store.list_tasks(**inputs)
-        return {"tasks": tasks, "count": len(tasks)}
-
-    if name == "complete_task":
-        task = task_store.complete_task(inputs["task_id"])
-        if task:
-            return {"success": True, "task": task}
-        return {"success": False, "error": f"Taak met ID '{inputs['task_id']}' niet gevonden."}
-
-    if name == "update_task":
-        task_id = inputs.pop("task_id")
-        task = task_store.update_task(task_id, **inputs)
-        if task:
-            return {"success": True, "task": task}
-        return {"success": False, "error": f"Taak met ID '{task_id}' niet gevonden."}
-
-    if name == "delete_task":
-        deleted = task_store.delete_task(inputs["task_id"])
-        return {"success": deleted, "task_id": inputs["task_id"]}
-
-    if name == "get_summary":
-        return task_store.get_summary()
-
-    return {"error": f"Onbekend tool: {name}"}
-
-
-# ── Agent ─────────────────────────────────────────────────────────────────────
-
 class TaskAgent:
-    def __init__(self):
-        self.messages: list[dict] = []
+    """
+    Persoonlijke taak-assistent met:
+    - Dynamische LLM-selectie (Ollama voor chat, Claude voor tools)
+    - Persistente gespreksgeschiedenis (SQLite)
+    - Motivatie-berichten na voltooide taken
+    - Achtergrond herinneringen-daemon
+    """
+
+    def __init__(self, prefer_ollama: bool = True):
+        self._router = ModelRouter(prefer_ollama=prefer_ollama)
+        self._motivation = MotivationEngine()
+        self._daemon = ReminderDaemon(notify=self._print_notification)
+        self._daemon.start()
+
+        import os
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise EnvironmentError("ANTHROPIC_API_KEY is niet ingesteld.")
+        self._claude = anthropic.Anthropic(api_key=api_key)
+
+    # ------------------------------------------------------------------
+    # Publieke interface
+    # ------------------------------------------------------------------
+
+    def welcome(self) -> str:
+        """Geeft de welkomstboodschap terug bij opstarten."""
+        return self._motivation.welcome_message()
 
     def chat(self, user_input: str) -> str:
-        from datetime import date
+        """
+        Verwerk één gebruikersbericht en geef een antwoord.
+        Slaat alle berichten op in de database.
+        """
+        # Sla gebruikersbericht op
+        ConversationStore.append("user", user_input)
 
-        self.messages.append({"role": "user", "content": user_input})
-        system = SYSTEM_PROMPT.format(today=date.today().isoformat())
+        # Haal gespreksgeschiedenis op (laatste 20 berichten voor context)
+        history = ConversationStore.recent(limit=20)
 
-        # Agentic loop
-        while True:
-            with client.messages.stream(
-                model=MODEL,
-                max_tokens=4096,
-                thinking={"type": "adaptive"},
+        # Bouw de berichten-lijst op voor de agentic loop
+        messages = [{"role": m["role"], "content": m["content"]} for m in history]
+
+        # Voer de agentic loop uit (altijd via Claude voor tool-gebruik)
+        system = _SYSTEM_PROMPT.format(date=datetime.now().strftime("%A %d %B %Y"))
+        response_text, used_model = self._agentic_loop(messages, system)
+
+        # Sla antwoord op
+        ConversationStore.append("assistant", response_text, model_used=used_model)
+
+        return response_text
+
+    def daily_briefing(self) -> str:
+        return self._motivation.daily_briefing()
+
+    def shutdown(self) -> None:
+        self._daemon.stop()
+
+    # ------------------------------------------------------------------
+    # Agentic loop (Claude native tool_use)
+    # ------------------------------------------------------------------
+
+    def _agentic_loop(
+        self,
+        messages: list[dict],
+        system: str,
+        max_iterations: int = 6,
+    ) -> tuple[str, str]:
+        """
+        Agentic loop met Claude native tool_use:
+        1. Stuur berichten naar Claude
+        2. Als Claude tools wil gebruiken: voer uit en voeg resultaten toe
+        3. Herhaal totdat Claude klaar is
+
+        Geeft (antwoord_tekst, model_naam) terug.
+        """
+        current_messages = list(messages)
+        used_model = "claude-sonnet-4-6"
+        completed_tool_calls: list[dict] = []
+
+        for iteration in range(max_iterations):
+            response = self._claude.messages.create(
+                model=used_model,
+                max_tokens=1024,
                 system=system,
-                tools=TOOLS,
-                messages=self.messages,
-            ) as stream:
-                response = stream.get_final_message()
+                tools=_CLAUDE_TOOLS,
+                messages=current_messages,
+            )
+            used_model = response.model
 
-            # Collect text blocks for the final reply
+            logger.debug(
+                "[%d/%d] stop=%s blocks=%d",
+                iteration + 1, max_iterations,
+                response.stop_reason, len(response.content),
+            )
+
+            # Verzamel tekst-blokken
             text_blocks = [b.text for b in response.content if b.type == "text"]
 
+            # Geen tool-calls → klaar
             if response.stop_reason == "end_turn":
-                # No more tool calls — return the final text
-                reply = "\n".join(text_blocks).strip()
-                self.messages.append({"role": "assistant", "content": response.content})
-                return reply
+                final_text = "\n".join(text_blocks).strip() or "Klaar."
+                return self._enrich_with_motivation(final_text, completed_tool_calls), used_model
 
+            # Tool-calls uitvoeren
             if response.stop_reason == "tool_use":
-                # Execute all requested tools
-                self.messages.append({"role": "assistant", "content": response.content})
+                current_messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                })
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
-                        result = _execute_tool(block.name, dict(block.input))
+                        result = execute_tool(block.name, dict(block.input))
+                        logger.debug("Tool %s → %s", block.name, result)
+                        completed_tool_calls.append({
+                            "name": block.name,
+                            "input": dict(block.input),
+                        })
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "content": json.dumps(result, ensure_ascii=False),
                         })
-                self.messages.append({"role": "user", "content": tool_results})
-                # Loop back to get Claude's response after tool execution
+                current_messages.append({"role": "user", "content": tool_results})
                 continue
 
-            # Unexpected stop reason
-            reply = "\n".join(text_blocks).strip()
-            self.messages.append({"role": "assistant", "content": response.content})
-            return reply
+            # Onverwachte stop_reason
+            return "\n".join(text_blocks).strip() or "Klaar.", used_model
+
+        return "Maximale iteraties bereikt.", used_model
+
+    # ------------------------------------------------------------------
+    # Motivatie-verrijking
+    # ------------------------------------------------------------------
+
+    def _enrich_with_motivation(self, text: str, tool_calls: list[dict]) -> str:
+        """Voeg motivatie-berichten toe na het voltooien van taken."""
+        completed_tasks = []
+        for tc in tool_calls:
+            if tc["name"] == "complete_task":
+                task_id = tc["input"].get("task_id", "")
+                task = TaskStore.get(task_id)
+                if task:
+                    completed_tasks.append(task)
+
+        if not completed_tasks:
+            return text
+
+        motivation_lines = []
+        for task in completed_tasks:
+            streak = task.get("streak_count", 0)
+            motivation_lines.append(
+                self._motivation.on_task_completed(task["title"], streak)
+            )
+
+        return text + "\n\n" + "\n".join(motivation_lines)
+
+    # ------------------------------------------------------------------
+    # Notification callback (voor ReminderDaemon)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _print_notification(message: str) -> None:
+        print(message, flush=True)
