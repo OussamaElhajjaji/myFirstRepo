@@ -22,7 +22,7 @@
 
 | Klant | Risico | DVO | AV | DPA | SLA | Opmerkingen |
 |-------|--------|-----|----|-----|-----|-------------|
-| Dakprofijt | HOOG | :warning: | :warning: | :warning: | :warning: | B2C consumentendata, bedrijfskritisch |
+| Dakprofijt | MIDDEL | :white_check_mark: | :white_check_mark: | :white_check_mark: | :x: | **COMPLEET** — Advies/consultancy, geen SLA nodig |
 | Batterijprofijt | HOOG | :warning: | :warning: | :warning: | :warning: | B2C consumentendata, bedrijfskritisch |
 | BatteriQ | HOOG | :warning: | :warning: | :warning: | :warning: | B2C consumentendata, bedrijfskritisch |
 | VoltaGrid | HOOG | :warning: | :warning: | :warning: | :warning: | Ook lead campagnes — dubbel risico |
