@@ -39,7 +39,7 @@
 
 | Klant | Risico | DVO | AV | DPA | SLA | Opmerkingen |
 |-------|--------|-----|----|-----|-----|-------------|
-| PulsePower | HOOG | :warning: | :warning: | :warning: | :warning: | Gereguleerde sector, grote datasets |
+| PulsePower | HOOG | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | **COMPLEET** — DVO, DPA, SLA opgesteld |
 | Clean Energy | HOOG | :warning: | :warning: | :warning: | :warning: | Gereguleerde sector, grote datasets |
 
 **Prioriteit:** Zeer hoog — gereguleerde sector, compliance-risico.
