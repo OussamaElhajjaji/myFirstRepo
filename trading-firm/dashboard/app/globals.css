@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #080c10;
+  --accent-cyan: #00e5cc;
+  --accent-orange: #ff6b35;
+  --danger: #ff3355;
+  --text: #c8d8e8;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-syne: 'Syne', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* Animated value flash */
+@keyframes value-flash {
+  0% { color: var(--accent-cyan); }
+  100% { color: var(--text); }
+}
+
+.value-updated {
+  animation: value-flash 0.8s ease-out;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a0f14; }
+::-webkit-scrollbar-thumb { background: #00e5cc44; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #00e5cc88; }
+
+/* Card styles */
+.card {
+  background: #0a0f14;
+  border: 1px solid #00e5cc22;
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+/* Status badges */
+.badge-live {
+  background: #ff6b3533;
+  color: #ff6b35;
+  border: 1px solid #ff6b3566;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  animation: pulse 2s infinite;
+}
+
+.badge-paper {
+  background: #00e5cc22;
+  color: #00e5cc;
+  border: 1px solid #00e5cc44;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
